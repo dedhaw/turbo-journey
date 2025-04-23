@@ -1,4 +1,4 @@
-import AudioCapture from './components/prototype/AudioCapture';
+import AudioCapture from './components/prototype/AudioCaptureV2';
 import './App.css'
 
 function App() {

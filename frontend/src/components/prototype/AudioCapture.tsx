@@ -12,7 +12,7 @@ const AudioCapture: React.FC = () => {
   // Get media stream once on component mount if possible
   useEffect(() => {
     // Set up WebSocket connection to FastAPI backend
-    setupWebSocket();
+    // setupWebSocket();
     
     // Pre-request microphone permissions
     requestMicrophoneAccess();

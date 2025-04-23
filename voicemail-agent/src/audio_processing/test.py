@@ -1,4 +1,4 @@
-from deepgram import DeepgramClient, LiveOptions, LiveTranscriptionEvents
+from deepgram import DeepgramClient, SpeakOptions, LiveOptions, LiveTranscriptionEvents
 from dotenv import load_dotenv
 import os
 import threading
@@ -54,3 +54,21 @@ async def test_live_transcription():
     except Exception as e:
         print(f"Could not open socket: {e}")
         return
+    
+    
+async def test_audio_transcription():
+    SPEAK_OPTIONS = {"text": "Hello, how can I help you today?"}
+    filename = "output.mp3"
+    try:
+        # STEP 1: Create a Deepgram client.
+        # By default, the DEEPGRAM_API_KEY environment variable will be used for the API Key
+        deepgram = DeepgramClient(DEEPGRAM_API_KEY)
+        # STEP 2: Configure the options (such as model choice, audio configuration, etc.)
+        options = SpeakOptions(
+            model="aura-2-thalia-en",
+        )
+        # STEP 3: Call the save method on the speak property
+        response = deepgram.speak.rest.v("1").save(filename, SPEAK_OPTIONS, options)
+        print(response.to_json(indent=4))
+    except Exception as e:
+        print(f"Exception: {e}")
