@@ -4,7 +4,9 @@ from typing import Optional
 class Conversation(SQLModel, table=True):
     id: str = Field(primary_key=True)
     user_id: str = Field(unique=True)
+    notes: list
     
 class UserInfo(SQLModel, table=True):
     id: str = Field(primary_key=True)
-    personality_json: str
+    first_name: str
+    last_name: str

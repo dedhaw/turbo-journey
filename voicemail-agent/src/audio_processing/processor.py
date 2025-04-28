@@ -1,40 +1,35 @@
 from fastapi import WebSocket, WebSocketDisconnect
 import logging
 import asyncio
-from deepgram import DeepgramClient, LiveOptions, LiveTranscriptionEvents, SpeakOptions
+from deepgram import DeepgramClient, LiveOptions, SpeakOptions
 from dotenv import load_dotenv
 import os
 import json
 import queue
 import tempfile
 import base64
-import re
 
 from ..agent.response import ai_response
 
-from .helper import send_heartbeat
+from .helper import split_into_sentences, handle_command, create_deepgram_connection
 
 load_dotenv()
 
 DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY')
 deepgram = DeepgramClient(DEEPGRAM_API_KEY)
 
-async def live_audio_transcription(output_message):
+async def live_audio_transcription(sentence):
     try:
-        # Create a temporary file to store the audio
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
             temp_filename = temp_file.name
             
-        # Configure speech options
-        speak_options = {"text": output_message}
+        speak_options = {"text": sentence}
         options = SpeakOptions(
             model="aura-2-thalia-en",
         )
         
-        # Generate and save the audio
-        response = deepgram.speak.rest.v("1").save(temp_filename, speak_options, options)
+        _ = deepgram.speak.rest.v("1").save(temp_filename, speak_options, options)
         
-        # Read the file as bytes
         with open(temp_filename, 'rb') as f:
             audio_bytes = f.read()
             
@@ -44,11 +39,10 @@ async def live_audio_transcription(output_message):
         except:
             pass
             
-        # Return the audio bytes
         return audio_bytes
     
     except Exception as e:
-        logging.error(f"Error generating speech: {e}")
+        logging.error(f"Error generating speech for sentence: {e}")
         return None
 
 async def live_text_transcription(websocket: WebSocket):
@@ -73,85 +67,105 @@ async def live_text_transcription(websocket: WebSocket):
             if not transcript_queue.empty():
                 transcript = transcript_queue.get()
                 
-                # Send back output to frontend using websocket
                 print(f"User Input: {transcript}")
                 response_text = ai_response(transcript)
                 print(f"AI Response: {response_text}")
                 
-                audio_task = asyncio.create_task(live_audio_transcription(response_text))
+                sentences = await split_into_sentences(response_text)
                 
-                audio_bytes = await audio_task
-                if audio_bytes:
-                    audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-                    await websocket.send_text(json.dumps({
-                        "audio": audio_base64,
-                        "content_type": "audio/mp3"
-                    }))
-                    
                 await websocket.send_text(json.dumps({"transcript": response_text}))
+                
+                for sentence in sentences:
+                    audio_bytes = await live_audio_transcription(sentence)
+                    
+                    if audio_bytes:
+                        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                        await websocket.send_text(json.dumps({
+                            "audio": audio_base64,
+                            "content_type": "audio/mp3",
+                            "sentence": sentence
+                        }))
+                        
+                        await asyncio.sleep(0.1)
                 
             await asyncio.sleep(0.1)
     
-    # Run in a seperate task
     queue_task = asyncio.create_task(process_transcript())
+    conn = None
+    
+    def on_message(sender, result, **kwargs):
+        try:
+            transcript = result.channel.alternatives[0].transcript
+            if len(transcript) > 0:
+                logging.info(f"Transcript: {transcript}")
+                transcript_queue.put(transcript)
+        except Exception as e:
+            logging.error(f"Error processing transcript: {e}")
+    
+    options = LiveOptions(
+        model="nova-3", 
+        interim_results=False, 
+        language="en-US",
+        punctuate=True,
+        diarize=True,
+        endpointing=7000
+    )
     
     try:
-        conn = deepgram.listen.websocket.v("1")
+        await websocket.send_text(json.dumps({
+            "status": "ready",
+            "message": "Server ready to accept commands"
+        }))
         
-        # Handle incoming transcription results with a thread-safe queue
-        def on_message(sender, result, **kwargs):
-            try:
-                transcript = result.channel.alternatives[0].transcript
-                if len(transcript) > 0:
-                    logging.info(f"Transcript: {transcript}")
-
-                    transcript_queue.put(transcript)
-            except Exception as e:
-                logging.error(f"Error processing transcript: {e}")
-        
-        # Deepgram connection
-        conn.on(LiveTranscriptionEvents.Transcript, on_message)
-        
-        options = LiveOptions(
-            model="nova-3", 
-            interim_results=False, 
-            language="en-US",
-            punctuate=True,
-            diarize=True
-        )
-        
-        conn.start(options)
-        
-        # Process audio from user
         while True:
             try:
-                # Send heartbeat until we recieve the bytes
-                heartbeat_task = asyncio.create_task(send_heartbeat(conn))
-                audio_data = await websocket.receive_bytes()                
-                heartbeat_task.cancel()
+                message_data = await websocket.receive()
                 
-                conn.send(audio_data)
+                if "text" in message_data:
+                    try:
+                        message = json.loads(message_data["text"])
+                        conn = await handle_command(websocket, conn, message, on_message, deepgram, options)
+                        
+                        if message.get("type") == "audio" and message.get("data"):
+                            if conn and conn.is_connected():
+                                audio_data = base64.b64decode(message["data"])
+                                conn.send(audio_data)
+                    
+                    except json.JSONDecodeError:
+                        logging.error("Received invalid JSON message")
+                
+                elif "bytes" in message_data:
+                    if conn and conn.is_connected():
+                        conn.send(message_data["bytes"])
+                    else:
+                        if not conn:
+                            conn, _ = await create_deepgram_connection(on_message, deepgram, options)
+                            await websocket.send_text(json.dumps({
+                                "status": "listening",
+                                "message": "Auto-started listening"
+                            }))
+                        
+                        if conn:
+                            conn.send(message_data["bytes"])
                 
             except WebSocketDisconnect:
                 logging.info("WebSocket disconnected")
                 break
             
             except Exception as e:
-                logging.error(f"Error processing audio data: {e}")
+                logging.error(f"Error processing data: {e}")
                 await websocket.send_text(json.dumps({"error": str(e)}))
-                break
                 
     except WebSocketDisconnect:
         logging.info("Disconnected")
     except Exception as e:
         logging.error(f"Error in WebSocket handler: {e}")
-
+    
     finally:
         try:
-            if 'conn' in locals():
+            if conn in locals():
                 conn.finish()
-            if 'queue_task' in locals():
+            if queue_task in locals():
                 queue_task.cancel()
-    
         except Exception as e:
             logging.error(f"Error in cleaning connection or finalizing events: {e}")
