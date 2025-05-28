@@ -5,6 +5,11 @@ import logging
 
 # logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
+import os
+import certifi
+
+os.environ['SSL_CERT_FILE'] = certifi.where()
+
 app = FastAPI()
 
 app.include_router(test_router)
