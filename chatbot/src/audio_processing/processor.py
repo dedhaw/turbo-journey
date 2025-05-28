@@ -6,11 +6,11 @@ from dotenv import load_dotenv
 import os
 import json
 
-from ..agent.response import ai_response
 from .connection_manager import DeepgramConnectionManager
 from .conversation_state import ConversationState
 from .message_handler import WebSocketMessageHandler
 from .audio import AudioProcessor
+from .transcript_processor import TranscriptProcessor
 
 load_dotenv()
 
@@ -19,63 +19,15 @@ deepgram = DeepgramClient(DEEPGRAM_API_KEY)
 
 
 async def live_text_transcription(websocket: WebSocket):
-    """Main orchestrator for real-time audio transcription and response."""
+    """Main loop for real-time audio transcription and response."""
     
     connection_manager = DeepgramConnectionManager(deepgram)
     conversation_state = ConversationState()
     message_handler = WebSocketMessageHandler(connection_manager, conversation_state)
     audio_processor = AudioProcessor(deepgram)
+    transcript_processor = TranscriptProcessor(conversation_state, audio_processor)
     
-    async def process_transcript():
-        """Process transcript queue and generate AI responses."""
-        while True:
-            transcript_data = conversation_state.get_next_transcript()
-            if transcript_data:
-                transcript = transcript_data["transcript"]
-                transcript_time = transcript_data["timestamp"]
-                
-                if conversation_state.should_ignore_user_input(transcript_time):
-                    print(f"Ignoring user input during AI speech (within 2 seconds): {transcript}")
-                    continue
-                elif conversation_state.is_user_interrupting(transcript_time):
-                    print(f"User interruption detected: {transcript}")
-                    conversation_state.reset_ai_speaking()
-                    await websocket.send_text(json.dumps({"interrupt": True}))
-                
-                if not conversation_state.ai_currently_speaking:
-                    transcript = conversation_state.handle_partial_transcript(transcript)
-                    
-                    if not conversation_state.is_complete_sentence(transcript):
-                        conversation_state.set_partial_transcript(transcript)
-                        print(f"Incomplete sentence, keeping in buffer: {transcript}")
-                        continue
-                    
-                    print(f"User Input: {transcript}")
-                    conversation_state.start_ai_speaking()
-                    
-                    response_text = ai_response(transcript)
-                    print(f"AI Response: {response_text}")
-                    
-                    await audio_processor.process_response_audio(
-                        websocket, response_text, conversation_state
-                    )
-                
-            await asyncio.sleep(0.1)
-    
-    def on_message(sender, result, **kwargs):
-        try:
-            transcript = result.channel.alternatives[0].transcript
-            is_final = getattr(result, 'is_final', None)
-            if is_final is None:
-                is_final = getattr(result.channel.alternatives[0], 'is_final', False)
-            
-            if is_final and len(transcript) > 0:
-                print(f"Final transcript: {transcript}")
-                conversation_state.add_transcript(transcript)
-            else:
-                print("Interim transcript ignored")
-        except Exception as e:
-            logging.error(f"Error processing transcript: {e}")
+    on_message = transcript_processor.setup_deepgram_callback()
     
     options = LiveOptions(
         model="nova-3", 
@@ -89,13 +41,14 @@ async def live_text_transcription(websocket: WebSocket):
         utterance_end_ms="1000"
     )
     
+    # Main WebSocket loop
     try:
         await websocket.send_text(json.dumps({
             "status": "ready",
             "message": "Server ready to accept commands"
         }))
         
-        queue_task = asyncio.create_task(process_transcript())
+        queue_task = asyncio.create_task(transcript_processor.start_processing(websocket))
         
         while True:
             try:

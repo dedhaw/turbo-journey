@@ -4,8 +4,14 @@ import logging
 import asyncio
 import os
 import json
+import re
 from deepgram import SpeakOptions
-from .helper import split_into_sentences
+
+
+async def split_into_sentences(text):
+    """Split text into sentences for progressive audio generation."""
+    sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
+    return [s.strip() for s in sentences if s.strip()]
 
 
 class AudioProcessor:
@@ -48,7 +54,6 @@ class AudioProcessor:
         # Send transcript to frontend first
         await websocket.send_text(json.dumps({"transcript": response_text}))
         
-        # Generate and stream audio for each sentence
         for i, sentence in enumerate(sentences):
             if not conversation_state.ai_currently_speaking:
                 print(f"AI speech interrupted, stopping at sentence {i}")
