@@ -13,10 +13,15 @@ export default function AudioCapture() {
     const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
     const audioQueueRef = useRef<Array<{blob: Blob, sentence: string}>>([]);
     const isPlayingRef = useRef<boolean>(false);
+    const aiSpeakingRef = useRef<boolean>(false);
+    const isRecordingRef = useRef<boolean>(false);
+
+    useEffect(() => {
+        isRecordingRef.current = isRecording;
+    }, [isRecording]);
 
     useEffect(() => {
         return () => {
-            // Cleanup on unmount
             if (audioPlayerRef.current) {
                 audioPlayerRef.current.pause();
                 URL.revokeObjectURL(audioPlayerRef.current.src);
@@ -28,7 +33,6 @@ export default function AudioCapture() {
     /*** Connection setup methods ***/
     const setupWebSocket = (): Promise<boolean> => {
         return new Promise((resolve) => {
-            // Close any existing connection
             if (socketRef.current) {
                 socketRef.current.close();
                 socketRef.current = null;
@@ -61,8 +65,8 @@ export default function AudioCapture() {
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
+                    console.log("Received WebSocket message:", data);
                     
-                    // Handle status updates from server
                     if (data.status) {
                         console.log(`Server status: ${data.status}`, data.message);
                         
@@ -70,29 +74,77 @@ export default function AudioCapture() {
                             setStatus("Listening to your voice...");
                         } else if (data.status === "stopped") {
                             setStatus("Listening stopped");
+                            setIsConnected("DISCONNECTED");
                         } else if (data.status === "ready") {
                             setStatus("Server ready");
                         }
                     }
                     
-                    // Handle transcripts
                     if (data.transcript) {
+                        console.log("Received transcript:", data.transcript);
                         setTranscript(data.transcript);
+                        aiSpeakingRef.current = true;
+                        console.log("AI started speaking - microphone input will be muted");
+                        console.log("Set aiSpeakingRef to true");
                     }
                     
-                    // Handle audio
                     if (data.audio) {
-                        // Add audio to queue for streaming playback
-                        const audioBlob = base64ToBlob(data.audio, data.content_type);
-                        audioQueueRef.current.push({ blob: audioBlob, sentence: data.sentence });
+                        console.log("Received audio data, sentence:", data.sentence);
+                        console.log("Current recording state:", isRecordingRef.current); // Use ref instead
+                        console.log("AI speaking state:", aiSpeakingRef.current);
                         
-                        // Start playing if not already playing
+                        if (!isRecordingRef.current) {
+                            console.log("Not recording anymore, ignoring audio");
+                            return;
+                        }
+                        
+                        if (!aiSpeakingRef.current) {
+                            console.log("AI was interrupted, ignoring incoming audio");
+                            return;
+                        }
+                        
+                        const audioBlob = base64ToBlob(data.audio, data.content_type);
+                        console.log("Created audio blob, size:", audioBlob.size, "type:", audioBlob.type);
+                        audioQueueRef.current.push({ blob: audioBlob, sentence: data.sentence });
+                        console.log("Audio queue length after push:", audioQueueRef.current.length);
+                        
                         if (!isPlayingRef.current) {
+                            console.log("Starting audio playback");
                             playNextAudio();
+                        } else {
+                            console.log("Audio already playing, added to queue");
                         }
                     }
                     
-                    // Handle errors
+                    if (data.deepgram_status) {
+                        console.log(`Deepgram connection ${data.deepgram_status}`);
+                        if (data.deepgram_status === "closed") {
+                            setStatus("AI speaking - microphone paused");
+                        } else if (data.deepgram_status === "reopened") {
+                            setStatus("Listening to your voice...");
+                        } else if (data.deepgram_status === "failed_to_reopen") {
+                            setStatus("Connection issue - please restart recording");
+                            console.error("Failed to reopen Deepgram connection");
+                        }
+                    }
+                    
+                    if (data.interrupt) {
+                        console.log("Interruption detected, stopping audio playback");
+                        stopAudioPlayback();
+                        aiSpeakingRef.current = false;
+                        setStatus("Listening to your voice...");
+                    }
+                    
+                    if (data.ai_finished_speaking) {
+                        console.log("Backend says AI finished speaking");
+                        if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
+                            aiSpeakingRef.current = false;
+                            console.log("Set aiSpeakingRef to false - backend confirmed all audio sent");
+                        } else {
+                            console.log("Audio still in queue or playing, keeping aiSpeakingRef true");
+                        }
+                    }
+                    
                     if (data.error) {
                         console.error("Server error:", data.error);
                         setStatus(`Error: ${data.error}`);
@@ -104,7 +156,6 @@ export default function AudioCapture() {
             
             socketRef.current = ws;
             
-            // Set a timeout in case connection takes too long
             setTimeout(() => {
                 if (ws.readyState !== WebSocket.OPEN) {
                     resolve(false);
@@ -114,63 +165,137 @@ export default function AudioCapture() {
     };
 
     /*** Play Audio on frontend setup ***/
-    const playNextAudio = () => {
+    const playNextAudio = async () => {
+        console.log("playNextAudio called, isRecordingRef:", isRecordingRef.current);
+        console.log("Queue length:", audioQueueRef.current.length);
+        console.log("isPlayingRef:", isPlayingRef.current);
+        
+        if (!isRecordingRef.current) {
+            console.log("Recording stopped, canceling audio playback");
+            isPlayingRef.current = false;
+            return;
+        }
+        
         if (audioQueueRef.current.length === 0) {
             isPlayingRef.current = false;
+            console.log("Audio queue is empty, finished playing");
+            console.log("Queue empty, isPlayingRef set to false");
             return;
         }
         
         isPlayingRef.current = true;
         const nextAudio = audioQueueRef.current.shift()!;
         
+        console.log("Playing next audio sentence:", nextAudio.sentence);
+        console.log("Remaining queue length:", audioQueueRef.current.length);
+        
         const audioUrl = URL.createObjectURL(nextAudio.blob);
         
-        if (!audioPlayerRef.current) {
-            const audioElement = new Audio();
-            audioElement.onended = () => {
-                URL.revokeObjectURL(audioElement.src);
-                playNextAudio(); // Play next audio after current finishes
-            };
-            audioPlayerRef.current = audioElement;
-        }
-        
-        // Set source and play audio
-        audioPlayerRef.current.src = audioUrl;
-        audioPlayerRef.current.play().catch(err => {
+        try {
+            if (!audioPlayerRef.current) {
+                console.log("Creating new audio element");
+                const audioElement = new Audio();
+                audioElement.preload = 'auto';
+                audioElement.volume = 1.0;
+                
+                audioElement.onended = () => {
+                    console.log("Audio ended, cleaning up and playing next");
+                    URL.revokeObjectURL(audioElement.src);
+                    playNextAudio(); 
+                };
+                
+                audioElement.onerror = (e) => {
+                    console.error("Audio element error:", e);
+                    URL.revokeObjectURL(audioUrl);
+                    isPlayingRef.current = false;
+                    if (audioQueueRef.current.length > 0 && isRecordingRef.current) {
+                        setTimeout(() => playNextAudio(), 100);
+                    }
+                };
+                
+                audioPlayerRef.current = audioElement;
+            }
+            
+            if (!isRecordingRef.current) {
+                console.log("Recording stopped during audio setup, aborting");
+                URL.revokeObjectURL(audioUrl);
+                isPlayingRef.current = false;
+                return;
+            }
+            
+            audioPlayerRef.current.src = audioUrl;
+            console.log("About to play audio...");
+            await audioPlayerRef.current.play();
+            console.log("Audio playback started successfully");
+            
+        } catch (err) {
             console.error("Error playing audio:", err);
-            setStatus("Error playing audio response");
+            setStatus(`Error playing audio response: ${err}`);
             isPlayingRef.current = false;
-        });
+            URL.revokeObjectURL(audioUrl);
+            
+            if (audioQueueRef.current.length > 0 && isRecordingRef.current) {
+                setTimeout(() => playNextAudio(), 100);
+            }
+        }
     };
     
-    // Helper function to stop current audio playback
     const stopAudioPlayback = () => {
+        console.log("Force stopping all audio playback");
+        
         if (audioPlayerRef.current) {
             audioPlayerRef.current.pause();
             audioPlayerRef.current.currentTime = 0;
+            
+            if (audioPlayerRef.current.src) {
+                URL.revokeObjectURL(audioPlayerRef.current.src);
+                audioPlayerRef.current.src = "";
+            }
         }
-        audioQueueRef.current = []; // Clear the queue
+        
+        audioQueueRef.current.forEach(audio => {
+            if (audio.blob) {
+                try {
+                    const blobUrl = URL.createObjectURL(audio.blob);
+                    URL.revokeObjectURL(blobUrl);
+                } catch (e) {
+                    console.log("Error revoking blob URL:", e);
+                }
+            }
+        });
+        
+        audioQueueRef.current = []; 
         isPlayingRef.current = false;
+        aiSpeakingRef.current = false;
+        
+        console.log("Audio playback force stopped and queue cleared");
     };
     
-    // Helper function to convert base64 to Blob
     const base64ToBlob = (base64: string, contentType: string): Blob => {
-        const byteCharacters = atob(base64);
-        const byteArrays = [];
-        
-        for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-            const slice = byteCharacters.slice(offset, offset + 512);
+        try {
+            console.log("Converting base64 to blob, content type:", contentType);
+            const byteCharacters = atob(base64);
+            const byteArrays = [];
             
-            const byteNumbers = new Array(slice.length);
-            for (let i = 0; i < slice.length; i++) {
-                byteNumbers[i] = slice.charCodeAt(i);
+            for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+                const slice = byteCharacters.slice(offset, offset + 512);
+                
+                const byteNumbers = new Array(slice.length);
+                for (let i = 0; i < slice.length; i++) {
+                    byteNumbers[i] = slice.charCodeAt(i);
+                }
+                
+                const byteArray = new Uint8Array(byteNumbers);
+                byteArrays.push(byteArray);
             }
             
-            const byteArray = new Uint8Array(byteNumbers);
-            byteArrays.push(byteArray);
+            const blob = new Blob(byteArrays, { type: contentType });
+            console.log("Blob created successfully, size:", blob.size);
+            return blob;
+        } catch (error) {
+            console.error("Error converting base64 to blob:", error);
+            throw error;
         }
-        
-        return new Blob(byteArrays, { type: contentType });
     };
 
     /*** Make connection and recording methods ***/
@@ -178,32 +303,32 @@ export default function AudioCapture() {
         try {
             setIsLoading(true);
             
-            // Step 0: Stop any ongoing audio playback
             stopAudioPlayback();
             
-            // Step 1: Connect to WebSocket if not already connected
-            if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-                setStatus("Connecting to server...");
-                const connected = await setupWebSocket();
-                if (!connected) {
-                    setStatus("Failed to connect to server");
-                    setIsLoading(false);
-                    return;
-                }
+            setStatus("Connecting to server...");
+            const connected = await setupWebSocket();
+            if (!connected) {
+                setStatus("Failed to connect to server");
+                setIsLoading(false);
+                return;
             }
             
-            // Step 2: Tell server to start listening
             socketRef.current!.send(JSON.stringify({
                 action: "start_listening"
             }));
             
-            // Step 3: Get microphone access
             setStatus("Requesting microphone access...");
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        sampleRate: 44100
+                    }
+                });
                 streamRef.current = stream;
                 
-                // Step 4: Set up MediaRecorder
                 const recorder = new MediaRecorder(stream, {
                     mimeType: 'audio/webm',
                 });
@@ -215,7 +340,6 @@ export default function AudioCapture() {
                         socketRef.current.readyState === WebSocket.OPEN && 
                         event.data.size > 0) {
                         
-                        // Send audio data
                         const arrayBuffer = await event.data.arrayBuffer();
                         socketRef.current.send(arrayBuffer);
                     }
@@ -229,15 +353,13 @@ export default function AudioCapture() {
                     setStatus(`Recording error: ${event.error}`);
                 };
                 
-                // Step 5: Start recording
-                recorder.start(100); // Collect audio in small chunks (100ms)
+                recorder.start(100);
                 setIsRecording(true);
                 
             } catch (error) {
                 setStatus(`Microphone access error: ${error instanceof Error ? error.message : String(error)}`);
                 console.error("Error accessing microphone:", error);
                 
-                // Tell server to stop listening
                 if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
                     socketRef.current.send(JSON.stringify({
                         action: "stop_listening"
@@ -254,26 +376,37 @@ export default function AudioCapture() {
     };
 
     const stopRecording = () => {
-        // Step 1: Stop the MediaRecorder
+        console.log("Stop recording clicked");
+        
+        stopAudioPlayback();
+        
+        setIsRecording(false);
+        
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
             mediaRecorderRef.current.stop();
         }
         
-        // Step 2: Stop audio tracks
         if (streamRef.current) {
             streamRef.current.getTracks().forEach(track => track.stop());
             streamRef.current = null;
         }
         
-        // Step 3: Tell server to stop listening
         if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
             socketRef.current.send(JSON.stringify({
                 action: "stop_listening"
             }));
+            
+            setTimeout(() => {
+                if (socketRef.current) {
+                    console.log("Closing WebSocket connection");
+                    socketRef.current.close();
+                    socketRef.current = null;
+                }
+            }, 100);
         }
         
-        setIsRecording(false);
         setStatus("Ready to record");
+        console.log("Stop recording completed");
     };
 
     return (
