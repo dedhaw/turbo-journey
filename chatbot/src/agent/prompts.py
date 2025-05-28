@@ -8,7 +8,7 @@ bot_background_information = """
 """
 
 basic_response = """
-    Respnd to the users prompt in less than 1000 characters used: \
+    Respond to the users prompt in less than 30 words used. Do not use any "-":  \
 """
 
 json_extraction_query = f"""

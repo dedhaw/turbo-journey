@@ -9,12 +9,10 @@ const AudioCapture: React.FC = () => {
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   
-  // Get media stream once on component mount if possible
   useEffect(() => {
     // Set up WebSocket connection to FastAPI backend
-    // setupWebSocket();
+    setupWebSocket();
     
-    // Pre-request microphone permissions
     requestMicrophoneAccess();
     
     return () => {
@@ -24,7 +22,7 @@ const AudioCapture: React.FC = () => {
   
   const setupWebSocket = () => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      return; // Already connected
+      return;
     }
     
     const ws = new WebSocket("ws://localhost:8000/listen");
@@ -40,7 +38,6 @@ const AudioCapture: React.FC = () => {
       setIsConnected(false);
       console.log("WebSocket closed");
       
-      // Attempt to reconnect after a short delay
       setTimeout(setupWebSocket, 2000);
     };
     
