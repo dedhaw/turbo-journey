@@ -1,11 +1,11 @@
-import AudioCapture from './components/prototype/AudioCaptureV2';
+import RecordButton from './components/Test';
 import './App.css'
 
 function App() {
 
   return (
     <>
-      <AudioCapture></AudioCapture>
+      <RecordButton></RecordButton>
     </>
   )
 }
