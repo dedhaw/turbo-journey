@@ -2,7 +2,6 @@ from deepgram import LiveTranscriptionEvents
 import logging
 import json
 
-
 class DeepgramConnectionManager:
     """Manages Deepgram WebSocket connections including creation, health monitoring, and cleanup."""
     

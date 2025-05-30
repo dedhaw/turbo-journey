@@ -1,6 +1,6 @@
 from fastapi import APIRouter, WebSocket
-from ..audio_processing.processor import live_text_transcription
-from ..audio_processing.test import test_live_transcription
+from audio_processing.processor import live_text_transcription
+from audio_processing.test import test_live_transcription
 import logging
 
 router = APIRouter()

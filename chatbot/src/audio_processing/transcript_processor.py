@@ -1,8 +1,7 @@
 import json
 import asyncio
 import logging
-from ..agent.response import ai_response
-
+from agent.response import ai_response
 
 class TranscriptProcessor:
     """Handles transcript processing, AI response generation, and conversation flow."""
@@ -80,7 +79,7 @@ class TranscriptProcessor:
                     print(f"Final transcript: {transcript}")
                     self.conversation_state.add_transcript(transcript)
                 else:
-                    print("Interim transcript ignored")
+                    logging.info("Interim transcript ignored")
             except Exception as e:
                 logging.error(f"Error processing transcript: {e}")
         

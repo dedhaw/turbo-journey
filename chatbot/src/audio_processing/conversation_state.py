@@ -1,7 +1,6 @@
 import queue
 import time
 
-
 class ConversationState:
     """Manages the state of the conversation including AI speaking status, transcripts, and timing."""
     

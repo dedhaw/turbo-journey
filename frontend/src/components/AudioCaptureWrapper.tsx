@@ -52,8 +52,8 @@ export default function AudioCaptureWrapper({
             }
             
             setStatus("Connecting to server...");
-            const ws = new WebSocket("ws://localhost:8000/listen");
-            
+            const ws = new WebSocket("wss://d3v0ukgc21hjp5.cloudfront.net/listen");
+
             ws.onopen = () => {
                 setStatus("Connected to server");
                 setIsConnected("CONNECTED");
@@ -71,7 +71,7 @@ export default function AudioCaptureWrapper({
             ws.onerror = (error) => {
                 setStatus("Connection error");
                 setIsConnected("ERROR");
-                console.error("WebSocket error", error);
+                console.log("WebSocket error", error);
                 resolve(false);
             };
             

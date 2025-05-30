@@ -3,7 +3,6 @@ import base64
 import logging
 import asyncio
 
-
 class WebSocketMessageHandler:
     """Handles WebSocket message processing including commands and audio data routing."""
     

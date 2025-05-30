@@ -4,4 +4,4 @@ router = APIRouter()
 
 @router.get("/")
 def read_root():
-    return {"message": "Hello, World!"}
+    return {"message": "Hello, World! | Health Check | TEST DEPLOY: 2"}
